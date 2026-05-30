@@ -271,9 +271,18 @@ type InferenceResult struct {
 	NDJSONLineCount  int                  `json:"ndjson_line_count"`
 	RawMessageIDs    []string             `json:"raw_message_ids,omitempty"`
 	Attachments      []UploadedAttachment `json:"attachments,omitempty"`
+	ToolCalls        []InferenceToolCall  `json:"tool_calls,omitempty"`
 	ConfigID         string               `json:"config_id,omitempty"`
 	ContextID        string               `json:"context_id,omitempty"`
 	OriginalDatetime string               `json:"original_datetime,omitempty"`
+}
+
+type InferenceToolCall struct {
+	ID         string `json:"id,omitempty"`
+	Type       string `json:"type,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Arguments  string `json:"arguments,omitempty"`
+	ResultJSON string `json:"result_json,omitempty"`
 }
 
 type InferenceTranscriptSummary struct {
@@ -1309,9 +1318,6 @@ func (c *NotionAIClient) buildDefaultWorkflowConfigValue(threadType string, useW
 	searchScopes := []map[string]any{}
 	if useWebSearch {
 		searchScopes = c.buildSearchScopes()
-		if len(searchScopes) == 0 {
-			searchScopes = []map[string]any{{"type": "everything"}}
-		}
 	}
 	configValue := map[string]any{
 		"type":                                           threadType,

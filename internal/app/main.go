@@ -1692,6 +1692,11 @@ func (a *App) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		SessionFingerprint: originalFingerprint,
 		RawMessageCount:    originalRawMessageCount,
 	}
+	toolCtx, err := newToolLoopContext(parseFunctionToolsAny(typed.Tools), typed.ToolChoice)
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "api_error", "tool_runtime_error")
+		return
+	}
 	freshThreadMode := forceFreshThreadPerRequest(cfg)
 	conversation := ConversationEntry{}
 	if matched, ok := a.resolveContinuationConversationWithExplicit("", hiddenPrompt, normalized.Segments, preferredConversationID, explicitThreadID); ok {
@@ -1723,7 +1728,7 @@ func (a *App) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		a.writeChatCompletionLiveStream(w, r, request, entry.ID, includeUsage, conversationID)
 		return
 	}
-	result, err := a.runPrompt(r, request)
+	result, err := a.runPromptOrToolLoop(r, request, toolCtx)
 	if err != nil {
 		a.failConversation(conversationID, err)
 		a.writeUpstreamError(w, err)
@@ -1909,6 +1914,11 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 		SessionFingerprint: originalFingerprint,
 		RawMessageCount:    originalRawMessageCount,
 	}
+	toolCtx, err := newToolLoopContext(parseFunctionToolsAny(typed.Tools), typed.ToolChoice)
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "api_error", "tool_runtime_error")
+		return
+	}
 	freshThreadMode := forceFreshThreadPerRequest(cfg)
 	conversation := ConversationEntry{}
 	if matched, ok := a.resolveContinuationConversationWithExplicit(previousResponseID, hiddenPrompt, normalized.Segments, preferredConversationID, explicitThreadID); ok {
@@ -1938,7 +1948,7 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 		a.writeResponsesLiveStream(w, r, request, entry.ID, cfg.DebugUpstream, conversationID)
 		return
 	}
-	result, err := a.runPrompt(r, request)
+	result, err := a.runPromptOrToolLoop(r, request, toolCtx)
 	if err != nil {
 		a.failConversation(conversationID, err)
 		a.writeUpstreamError(w, err)
@@ -1963,6 +1973,16 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 	a.completeConversation(conversationID, result)
 	a.persistConversationSession(conversationID, request, result)
 	writeJSON(w, http.StatusOK, responsePayload)
+}
+
+func (a *App) runPromptOrToolLoop(r *http.Request, request PromptRunRequest, toolCtx *toolLoopContext) (InferenceResult, error) {
+	if toolCtx == nil || len(toolCtx.Definitions) == 0 {
+		return a.runPrompt(r, request)
+	}
+	if a.runPromptOverride != nil {
+		return a.runPromptWithLocalTools(r.Context(), request, toolCtx)
+	}
+	return a.runPromptWithLocalTools(r.Context(), request, toolCtx)
 }
 
 func (a *App) writeUpstreamError(w http.ResponseWriter, err error) {
@@ -2022,6 +2042,23 @@ func (a *App) writeChatCompletionStream(w http.ResponseWriter, r *http.Request, 
 		}
 		chunks = append(chunks, buildChatStreamChunk(completionID, created, modelID, []map[string]any{
 			buildChatStreamReasoningChoice(0, part),
+		}, nil))
+	}
+	if len(result.ToolCalls) > 0 {
+		toolCalls := make([]map[string]any, 0, len(result.ToolCalls))
+		for _, item := range result.ToolCalls {
+			toolCalls = append(toolCalls, map[string]any{
+				"index": 0,
+				"id":    firstNonEmpty(item.ID, "call_"+strings.ReplaceAll(randomUUID(), "-", "")),
+				"type":  "function",
+				"function": map[string]any{
+					"name":      item.Name,
+					"arguments": firstNonEmpty(item.Arguments, "{}"),
+				},
+			})
+		}
+		chunks = append(chunks, buildChatStreamChunk(completionID, created, modelID, []map[string]any{
+			buildChatStreamToolCallChoice(0, toolCalls),
 		}, nil))
 	}
 	for _, part := range splitTextChunks(assistantText, cfg.StreamChunkRunes) {
@@ -2568,6 +2605,25 @@ func (a *App) writeResponsesStream(w http.ResponseWriter, r *http.Request, resul
 
 	for _, event := range events {
 		if err := writeEvent(event.name, event.payload); err != nil {
+			return
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		default:
+		}
+	}
+
+	for idx, call := range result.ToolCalls {
+		item := buildResponsesFunctionCallItem(
+			fmt.Sprintf("fc_%s_%d", strings.ReplaceAll(responseID, "-", ""), idx),
+			call,
+			"completed",
+		)
+		if err := writeEvent("response.output_item.added", buildResponsesOutputItemAddedEventAt(responseID, idx, item)); err != nil {
+			return
+		}
+		if err := writeEvent("response.output_item.done", buildResponsesOutputItemDoneEventAt(responseID, idx, item)); err != nil {
 			return
 		}
 		select {

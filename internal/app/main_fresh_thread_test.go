@@ -2228,6 +2228,174 @@ func TestHandleChatCompletionsSillyTavernFallbackOnContinuePrefillKey(t *testing
 	}
 }
 
+func TestHandleChatCompletionsRunsLocalToolLoop(t *testing.T) {
+	app := newFreshThreadTestApp(t)
+	workspace := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd failed: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldWD)
+	})
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("hello tool loop\nsecond line\n"), 0o644); err != nil {
+		t.Fatalf("write file failed: %v", err)
+	}
+
+	callCount := 0
+	app.runPromptOverride = func(_ *http.Request, request PromptRunRequest) (InferenceResult, error) {
+		callCount++
+		if callCount == 1 {
+			if !strings.Contains(request.Prompt, "available_tools") {
+				t.Fatalf("expected tool instruction prompt, got: %s", request.Prompt)
+			}
+			return InferenceResult{Text: `<tool_call>{"name":"local_read_file","arguments":{"path":"README.md"}}</tool_call>`}, nil
+		}
+		if !strings.Contains(request.Prompt, `"path":"README.md"`) {
+			t.Fatalf("expected tool history in second prompt, got: %s", request.Prompt)
+		}
+		if !strings.Contains(request.Prompt, "hello tool loop") {
+			t.Fatalf("expected file content in second prompt, got: %s", request.Prompt)
+		}
+		return InferenceResult{Text: "The repository README starts with: hello tool loop.", ThreadID: "tool-thread", MessageID: "tool-msg", TraceID: "tool-trace"}, nil
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", mustJSONBody(t, map[string]any{
+		"model":    "gpt-5.4",
+		"messages": []map[string]any{{"role": "user", "content": "Read the README and summarize it."}},
+		"tools": []map[string]any{{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "local_read_file",
+				"description": "Read a file from the workspace.",
+				"parameters":  map[string]any{"type": "object"},
+			},
+		}},
+	}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-api-key")
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status mismatch: got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if callCount != 2 {
+		t.Fatalf("expected two prompt runs, got %d", callCount)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response failed: %v", err)
+	}
+	choices := sliceValue(payload["choices"])
+	if len(choices) != 1 {
+		t.Fatalf("expected one choice, got %d", len(choices))
+	}
+	message := mapValue(mapValue(choices[0])["message"])
+	if got := strings.TrimSpace(stringValue(message["content"])); got != "The repository README starts with: hello tool loop." {
+		t.Fatalf("message mismatch: %q", got)
+	}
+}
+
+func TestParseStructuredToolCallResponse(t *testing.T) {
+	parsed, ok := parseStructuredToolCallResponse(`{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"local_read_file","arguments":"{\"path\":\"README.md\"}"}}],"content":""}`)
+	if !ok {
+		t.Fatalf("expected structured tool call to parse")
+	}
+	if !parsed.HasToolCalls || len(parsed.Calls) != 1 {
+		t.Fatalf("expected one parsed tool call, got %+v", parsed)
+	}
+	if parsed.Calls[0].Name != "local_read_file" {
+		t.Fatalf("tool name mismatch: %q", parsed.Calls[0].Name)
+	}
+	if parsed.Calls[0].Arguments != `{"path":"README.md"}` {
+		t.Fatalf("arguments mismatch: %q", parsed.Calls[0].Arguments)
+	}
+}
+
+func TestHandleChatCompletionsToolChoiceNoneSkipsToolLoop(t *testing.T) {
+	app := newFreshThreadTestApp(t)
+	callCount := 0
+	app.runPromptOverride = func(_ *http.Request, request PromptRunRequest) (InferenceResult, error) {
+		callCount++
+		if strings.Contains(request.Prompt, "available_tools") {
+			t.Fatalf("did not expect tool prompt when tool_choice=none")
+		}
+		return InferenceResult{Text: "No tools used.", ThreadID: "thread-none", MessageID: "msg-none", TraceID: "trace-none"}, nil
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", mustJSONBody(t, map[string]any{
+		"model":       "gpt-5.4",
+		"tool_choice": "none",
+		"messages":    []map[string]any{{"role": "user", "content": "Answer directly."}},
+		"tools": []map[string]any{{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "local_read_file",
+				"description": "Read a file from the workspace.",
+				"parameters":  map[string]any{"type": "object"},
+			},
+		}},
+	}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-api-key")
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status mismatch: got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if callCount != 1 {
+		t.Fatalf("expected single prompt run, got %d", callCount)
+	}
+}
+
+func TestBuildChatCompletionIncludesToolCalls(t *testing.T) {
+	payload := buildChatCompletion(InferenceResult{
+		Text: "Final answer.",
+		ToolCalls: []InferenceToolCall{{
+			ID:         "call_1",
+			Type:       "function",
+			Name:       "local_read_file",
+			Arguments:  `{"path":"README.md"}`,
+			ResultJSON: `{"ok":true,"content":"hello"}`,
+		}},
+	}, "gpt-5.4", false)
+	choices := sliceValue(payload["choices"])
+	message := mapValue(mapValue(choices[0])["message"])
+	toolCalls := sliceValue(message["tool_calls"])
+	if len(toolCalls) != 1 {
+		t.Fatalf("expected one tool call, got %d", len(toolCalls))
+	}
+	toolResults := sliceValue(message["tool_results"])
+	if len(toolResults) != 1 {
+		t.Fatalf("expected one tool result, got %d", len(toolResults))
+	}
+}
+
+func TestBuildResponsesOutputIncludesFunctionCallItems(t *testing.T) {
+	payload := buildResponsesOutputWithIDs(InferenceResult{
+		Text: "Final answer.",
+		ToolCalls: []InferenceToolCall{{
+			ID:         "call_1",
+			Type:       "function",
+			Name:       "local_read_file",
+			Arguments:  `{"path":"README.md"}`,
+			ResultJSON: `{"ok":true,"content":"hello"}`,
+		}},
+	}, "gpt-5.4", false, "resp_1", "msg_1", time.Now().Unix())
+	items := sliceValue(payload["output"])
+	if len(items) != 2 {
+		t.Fatalf("expected function call item plus message item, got %d", len(items))
+	}
+	if got := stringValue(mapValue(items[0])["type"]); got != "function_call" {
+		t.Fatalf("expected first output item to be function_call, got %q", got)
+	}
+}
+
 func TestDecodeResponsesRequestBodyFromRawFallsBackToMapOnTypedDecodeMismatch(t *testing.T) {
 	raw := []byte(`{"model":"gpt-5.4","input":"hello","attachments":[{"type":"file","file_url":"https://example.com/f.txt"}],"conversation_id":1}`)
 	typed, payload, err := decodeResponsesRequestBodyFromRaw(raw)

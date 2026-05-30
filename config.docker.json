@@ -60,7 +60,7 @@
     "pprof_addr": "127.0.0.1:6060"
   },
   "features": {
-    "use_web_search": true,
+    "use_web_search": false,
     "use_read_only_mode": false,
     "force_disable_upstream_edits": false,
     "force_fresh_thread_per_request": true,
@@ -80,4 +80,3 @@
   },
   "accounts": []
 }
-

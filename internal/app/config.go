@@ -475,7 +475,7 @@ func defaultConfig() AppConfig {
 			PprofAddr:    "127.0.0.1:6060",
 		},
 		Features: FeatureConfig{
-			UseWebSearch:               true,
+			UseWebSearch:               false,
 			UseReadOnlyMode:            false,
 			ForceDisableUpstreamEdits:  false,
 			ForceFreshThreadPerRequest: false,

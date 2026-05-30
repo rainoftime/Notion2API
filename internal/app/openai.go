@@ -1054,6 +1054,22 @@ func buildChatCompletion(result InferenceResult, modelID string, includeTrace bo
 		"role":    "assistant",
 		"content": assistantText,
 	}
+	finishReason := "stop"
+	if len(result.ToolCalls) > 0 {
+		toolCalls := make([]map[string]any, 0, len(result.ToolCalls))
+		for _, item := range result.ToolCalls {
+			toolCalls = append(toolCalls, map[string]any{
+				"id":   firstNonEmpty(item.ID, "call_"+strings.ReplaceAll(randomUUID(), "-", "")),
+				"type": firstNonEmpty(item.Type, "function"),
+				"function": map[string]any{
+					"name":      item.Name,
+					"arguments": firstNonEmpty(item.Arguments, "{}"),
+				},
+			})
+		}
+		message["tool_calls"] = toolCalls
+		message["tool_results"] = buildChatToolResults(result.ToolCalls)
+	}
 	attachChatReasoningFields(message, reasoningText)
 	payload := map[string]any{
 		"id":      "chatcmpl-" + strings.ReplaceAll(randomUUID(), "-", ""),
@@ -1063,7 +1079,7 @@ func buildChatCompletion(result InferenceResult, modelID string, includeTrace bo
 		"choices": []map[string]any{{
 			"index":         0,
 			"message":       message,
-			"finish_reason": "stop",
+			"finish_reason": finishReason,
 		}},
 		"usage":              buildUsage(result.Prompt, assistantText, reasoningText),
 		"system_fingerprint": "notion2api-local-go",
@@ -1072,6 +1088,22 @@ func buildChatCompletion(result InferenceResult, modelID string, includeTrace bo
 		payload["notion_trace"] = buildTrace(result)
 	}
 	return payload
+}
+
+func buildChatToolResults(calls []InferenceToolCall) []map[string]any {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(calls))
+	for _, item := range calls {
+		out = append(out, map[string]any{
+			"tool_call_id": item.ID,
+			"role":         "tool",
+			"name":         item.Name,
+			"content":      item.ResultJSON,
+		})
+	}
+	return out
 }
 
 func buildResponsesOutputTextPart(text string) map[string]any {
@@ -1103,6 +1135,21 @@ func buildResponsesMessageItemWithReasoning(itemID string, text string, reasonin
 		item["reasoning"] = reasoningText
 	}
 	return item
+}
+
+func buildResponsesFunctionCallItem(itemID string, call InferenceToolCall, status string) map[string]any {
+	if strings.TrimSpace(status) == "" {
+		status = "completed"
+	}
+	return map[string]any{
+		"id":        itemID,
+		"type":      "function_call",
+		"status":    status,
+		"call_id":   firstNonEmpty(call.ID, itemID),
+		"name":      call.Name,
+		"arguments": firstNonEmpty(call.Arguments, "{}"),
+		"result":    call.ResultJSON,
+	}
 }
 
 func buildResponsesStreamTerminalItem(itemID string, status string) map[string]any {
@@ -1155,6 +1202,15 @@ func buildChatStreamReasoningChoice(index int, delta string) map[string]any {
 	}
 }
 
+func buildChatStreamToolCallChoice(index int, toolCalls []map[string]any) map[string]any {
+	return map[string]any{
+		"index": index,
+		"delta": map[string]any{
+			"tool_calls": toolCalls,
+		},
+	}
+}
+
 func buildResponsesInProgressObject(responseID string, modelID string, createdAt int64) map[string]any {
 	return map[string]any{
 		"id":                 responseID,
@@ -1193,15 +1249,22 @@ func buildResponsesOutputWithIDs(result InferenceResult, modelID string, include
 	assistantText := sanitizeAssistantVisibleText(result.Text)
 	reasoningText := sanitizeAssistantVisibleText(result.Reasoning)
 	usage := buildUsage(result.Prompt, assistantText, reasoningText)
+	outputItems := make([]any, 0, len(result.ToolCalls)+1)
+	for idx, call := range result.ToolCalls {
+		outputItems = append(outputItems, buildResponsesFunctionCallItem(
+			fmt.Sprintf("fc_%s_%d", strings.ReplaceAll(responseID, "-", ""), idx),
+			call,
+			"completed",
+		))
+	}
+	outputItems = append(outputItems, buildResponsesMessageItemWithReasoning(outputItemID, assistantText, reasoningText, "completed"))
 	payload := map[string]any{
-		"id":         responseID,
-		"object":     "response",
-		"created_at": createdAt,
-		"status":     "completed",
-		"model":      modelID,
-		"output": []any{
-			buildResponsesMessageItemWithReasoning(outputItemID, assistantText, reasoningText, "completed"),
-		},
+		"id":                 responseID,
+		"object":             "response",
+		"created_at":         createdAt,
+		"status":             "completed",
+		"model":              modelID,
+		"output":             outputItems,
 		"output_text":        assistantText,
 		"error":              nil,
 		"incomplete_details": nil,

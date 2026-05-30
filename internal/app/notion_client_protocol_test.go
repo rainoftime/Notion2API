@@ -103,6 +103,28 @@ func TestBuildDefaultWorkflowConfigValueMatchesCurrentWebDefaults(t *testing.T) 
 	if !booleanValue(value["enableAgentAskSurvey"]) {
 		t.Fatalf("expected enableAgentAskSurvey=true")
 	}
+	if got := sliceValue(value["searchScopes"]); len(got) != 0 {
+		t.Fatalf("expected empty searchScopes by default, got %#v", got)
+	}
+}
+
+func TestBuildDefaultWorkflowConfigValueUsesConfiguredSearchScopesOnly(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Features.SearchScopes = []string{"web"}
+	client := newProtocolTestClient(cfg)
+
+	value := client.buildDefaultWorkflowConfigValue("workflow", true, "")
+	scopes := sliceValue(value["searchScopes"])
+	if len(scopes) != 1 {
+		t.Fatalf("expected one search scope, got %#v", scopes)
+	}
+	scope, ok := scopes[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected search scope object, got %#v", scopes[0])
+	}
+	if got := stringValue(scope["type"]); got != "web" {
+		t.Fatalf("search scope type mismatch: got %q want %q", got, "web")
+	}
 }
 
 func TestBuildInferencePayloadPlacesSelectedModelInConfigAndCreatedSource(t *testing.T) {
