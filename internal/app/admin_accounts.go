@@ -44,6 +44,55 @@ func parseManualImportProbeJSON(raw string) (probePayload, error) {
 	return probe, nil
 }
 
+func writeAccountProbeMetadata(account NotionAccount) error {
+	account = ensureAccountPaths(AppConfig{}, account)
+	if !fileExists(account.ProbeJSON) {
+		return nil
+	}
+	raw, err := os.ReadFile(account.ProbeJSON)
+	if err != nil {
+		return err
+	}
+	probe, err := parseManualImportProbeJSON(string(raw))
+	if err != nil {
+		return err
+	}
+	probe.Email = firstNonEmpty(strings.TrimSpace(account.Email), probe.Email)
+	probe.UserID = firstNonEmpty(strings.TrimSpace(account.UserID), probe.UserID)
+	probe.UserName = firstNonEmpty(strings.TrimSpace(account.UserName), probe.UserName)
+	probe.SpaceID = firstNonEmpty(strings.TrimSpace(account.SpaceID), probe.SpaceID)
+	probe.SpaceViewID = firstNonEmpty(strings.TrimSpace(account.SpaceViewID), probe.SpaceViewID)
+	probe.SpaceName = firstNonEmpty(strings.TrimSpace(account.SpaceName), probe.SpaceName)
+	probe.ClientVersion = firstNonEmpty(strings.TrimSpace(account.ClientVersion), probe.ClientVersion)
+	if len(probe.Cookies) == 0 {
+		return fmt.Errorf("probe json missing cookies: %s", account.ProbeJSON)
+	}
+	return writePrettyJSONFile(account.ProbeJSON, probe)
+}
+
+func writeAccountPendingStateMetadata(account NotionAccount) error {
+	account = ensureAccountPaths(AppConfig{}, account)
+	if !fileExists(account.PendingStatePath) {
+		return nil
+	}
+	raw, err := os.ReadFile(account.PendingStatePath)
+	if err != nil {
+		return err
+	}
+	var pending loginPendingState
+	if err := json.Unmarshal(raw, &pending); err != nil {
+		return err
+	}
+	pending.Email = firstNonEmpty(strings.TrimSpace(account.Email), pending.Email)
+	pending.UserID = firstNonEmpty(strings.TrimSpace(account.UserID), pending.UserID)
+	pending.UserName = firstNonEmpty(strings.TrimSpace(account.UserName), pending.UserName)
+	pending.SpaceID = firstNonEmpty(strings.TrimSpace(account.SpaceID), pending.SpaceID)
+	pending.SpaceViewID = firstNonEmpty(strings.TrimSpace(account.SpaceViewID), pending.SpaceViewID)
+	pending.SpaceName = firstNonEmpty(strings.TrimSpace(account.SpaceName), pending.SpaceName)
+	pending.ClientVersion = firstNonEmpty(strings.TrimSpace(account.ClientVersion), pending.ClientVersion)
+	return writeLoginPendingState(account.PendingStatePath, pending)
+}
+
 func (a *App) accountRuntimeSummary(cfg AppConfig, account NotionAccount) map[string]any {
 	account = ensureAccountPaths(cfg, account)
 	now := time.Now()
@@ -216,6 +265,15 @@ func intFromPayloadValue(value any) (int, error) {
 func mergeEditableAccountFields(existing NotionAccount, payload map[string]any) (NotionAccount, bool, error) {
 	next := existing
 	accountPayload := accountPayloadMap(payload)
+	if raw, ok := accountPayload["space_id"]; ok {
+		next.SpaceID = strings.TrimSpace(stringValue(raw))
+	}
+	if raw, ok := accountPayload["space_view_id"]; ok {
+		next.SpaceViewID = strings.TrimSpace(stringValue(raw))
+	}
+	if raw, ok := accountPayload["space_name"]; ok {
+		next.SpaceName = strings.TrimSpace(stringValue(raw))
+	}
 	if raw, ok := accountPayload["disabled"]; ok {
 		disabled, ok := raw.(bool)
 		if !ok {
@@ -315,6 +373,14 @@ func (a *App) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		cfg.Accounts[index] = ensureAccountPaths(cfg, next)
+		if err := writeAccountProbeMetadata(cfg.Accounts[index]); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"detail": fmt.Sprintf("update probe_json failed: %v", err)})
+			return
+		}
+		if err := writeAccountPendingStateMetadata(cfg.Accounts[index]); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"detail": fmt.Sprintf("update pending_state failed: %v", err)})
+			return
+		}
 		if canonicalEmailKey(cfg.ActiveAccount) == getAccountEmailKey(next) && next.Disabled {
 			cfg.ActiveAccount = ""
 			cfg.ProbeJSON = ""

@@ -169,6 +169,7 @@ export interface AccountItem {
   user_id?: string;
   user_name?: string;
   space_id?: string;
+  space_view_id?: string;
   space_name?: string;
   plan_type?: string;
   client_version?: string;

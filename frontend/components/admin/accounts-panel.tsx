@@ -38,6 +38,9 @@ interface AccountEditState {
   hourlyQuota: number;
   maxConcurrency: number;
   disabled: boolean;
+  spaceId: string;
+  spaceViewId: string;
+  spaceName: string;
 }
 
 interface ManualImportState {
@@ -84,6 +87,9 @@ function buildAccountEditMap(items: AccountItem[]): Record<string, AccountEditSt
       hourlyQuota: Number(item.hourly_quota ?? 0),
       maxConcurrency: Math.max(1, Number(item.max_concurrency ?? 1)),
       disabled: Boolean(item.disabled),
+      spaceId: item.space_id || '',
+      spaceViewId: item.space_view_id || '',
+      spaceName: item.space_name || '',
     };
     return accumulator;
   }, {});
@@ -273,8 +279,8 @@ export function AccountsPanel({
   const modelOptions = useMemo(() => models.filter((item) => item.id), [models]);
 
   const selectedEdit = selectedAccount?.email
-    ? accountEdits[selectedAccount.email] || { priority: 0, hourlyQuota: 0, maxConcurrency: 1, disabled: false }
-    : { priority: 0, hourlyQuota: 0, maxConcurrency: 1, disabled: false };
+    ? accountEdits[selectedAccount.email] || { priority: 0, hourlyQuota: 0, maxConcurrency: 1, disabled: false, spaceId: '', spaceViewId: '', spaceName: '' }
+    : { priority: 0, hourlyQuota: 0, maxConcurrency: 1, disabled: false, spaceId: '', spaceViewId: '', spaceName: '' };
 
   const summaryCards = [
     {
@@ -324,6 +330,9 @@ export function AccountsPanel({
         hourlyQuota: current[email]?.hourlyQuota ?? 0,
         maxConcurrency: current[email]?.maxConcurrency ?? 1,
         disabled: current[email]?.disabled ?? false,
+        spaceId: current[email]?.spaceId ?? '',
+        spaceViewId: current[email]?.spaceViewId ?? '',
+        spaceName: current[email]?.spaceName ?? '',
         ...patch,
       },
     }));
@@ -361,6 +370,9 @@ export function AccountsPanel({
         hourly_quota: edit.hourlyQuota,
         max_concurrency: edit.maxConcurrency,
         disabled: edit.disabled,
+        space_id: edit.spaceId.trim(),
+        space_view_id: edit.spaceViewId.trim(),
+        space_name: edit.spaceName.trim(),
       });
       toast.success(`已保存 ${email}`);
     } catch (error) {
@@ -695,7 +707,7 @@ export function AccountsPanel({
                   />
 
                   <div className="grid gap-4 lg:grid-cols-2">
-                    <Subsection eyebrow="Scheduling" title="调度与限额" description="保存后直接写回账号池。">
+                    <Subsection eyebrow="Scheduling" title="调度、限额与空间绑定" description="保存后直接写回账号池。">
                       <div className="space-y-4">
                         <div className="grid gap-4 md:grid-cols-3">
                           <DetailField label="Priority">
@@ -737,6 +749,41 @@ export function AccountsPanel({
                             />
                           </DetailField>
                         </div>
+                        <div className="grid gap-4 lg:grid-cols-2">
+                          <DetailField label="Space ID" hint="固定账号请求使用的目标空间 ID。">
+                            <Input
+                              value={selectedEdit.spaceId}
+                              onChange={(event) =>
+                                updateAccountEdit(selectedAccount.email, {
+                                  spaceId: event.target.value,
+                                })
+                              }
+                              className={FIELD_CLASS}
+                            />
+                          </DetailField>
+                          <DetailField label="Space View ID" hint="可选，但建议与目标空间一起固定。">
+                            <Input
+                              value={selectedEdit.spaceViewId}
+                              onChange={(event) =>
+                                updateAccountEdit(selectedAccount.email, {
+                                  spaceViewId: event.target.value,
+                                })
+                              }
+                              className={FIELD_CLASS}
+                            />
+                          </DetailField>
+                        </div>
+                        <DetailField label="Space Name" hint="展示用途为主，也建议与目标空间保持一致。">
+                          <Input
+                            value={selectedEdit.spaceName}
+                            onChange={(event) =>
+                              updateAccountEdit(selectedAccount.email, {
+                                spaceName: event.target.value,
+                              })
+                            }
+                            className={FIELD_CLASS}
+                          />
+                        </DetailField>
                         <div className="flex items-center justify-between gap-3 rounded-xl border bg-muted/40 px-3 py-3">
                           <div>
                             <div className="text-sm font-semibold tracking-tight">Disabled</div>
