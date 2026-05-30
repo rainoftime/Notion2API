@@ -707,7 +707,11 @@ export function AccountsPanel({
                   />
 
                   <div className="grid gap-4 lg:grid-cols-2">
-                    <Subsection eyebrow="Scheduling" title="调度、限额与空间绑定" description="保存后直接写回账号池。">
+                    <Subsection
+                      eyebrow="Scheduling"
+                      title="调度、限额与空间绑定"
+                      description="保存后直接写回账号池；手动锁定的空间会优先于自动刷新的默认空间。"
+                    >
                       <div className="space-y-4">
                         <div className="grid gap-4 md:grid-cols-3">
                           <DetailField label="Priority">
@@ -750,7 +754,7 @@ export function AccountsPanel({
                           </DetailField>
                         </div>
                         <div className="grid gap-4 lg:grid-cols-2">
-                          <DetailField label="Space ID" hint="固定账号请求使用的目标空间 ID。">
+                          <DetailField label="Locked Space ID" hint="手动锁定该账号请求使用的目标空间 ID，不会再被自动刷新改回默认空间。">
                             <Input
                               value={selectedEdit.spaceId}
                               onChange={(event) =>
@@ -761,7 +765,7 @@ export function AccountsPanel({
                               className={FIELD_CLASS}
                             />
                           </DetailField>
-                          <DetailField label="Space View ID" hint="可选，但建议与目标空间一起固定。">
+                          <DetailField label="Locked Space View ID" hint="可选；如已知目标视图，建议与 Locked Space ID 一起锁定。">
                             <Input
                               value={selectedEdit.spaceViewId}
                               onChange={(event) =>
@@ -773,7 +777,7 @@ export function AccountsPanel({
                             />
                           </DetailField>
                         </div>
-                        <DetailField label="Space Name" hint="展示用途为主，也建议与目标空间保持一致。">
+                        <DetailField label="Locked Space Name" hint="主要用于展示；建议与锁定空间保持一致，避免和当前运行态显示混淆。">
                           <Input
                             value={selectedEdit.spaceName}
                             onChange={(event) =>

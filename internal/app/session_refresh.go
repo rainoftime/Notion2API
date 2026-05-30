@@ -126,14 +126,16 @@ func buildRefreshedSession(ctx context.Context, cfg AppConfig, account NotionAcc
 	if spaceName == "" {
 		spaceName = userName + "'s Space"
 	}
+	// Preserve manually pinned workspace selection on the account before
+	// falling back to the previous session or Notion's default bootstrap space.
 	return SessionInfo{
 		ProbePath:     account.ProbeJSON,
 		ClientVersion: clientVersion,
 		UserID:        userID,
 		UserEmail:     firstNonEmpty(spaces.Email, prior.UserEmail, account.Email),
 		UserName:      userName,
-		SpaceID:       firstNonEmpty(spaces.SpaceID, prior.SpaceID, account.SpaceID),
-		SpaceViewID:   firstNonEmpty(spaces.SpaceViewID, prior.SpaceViewID, account.SpaceViewID),
+		SpaceID:       firstNonEmpty(account.SpaceID, prior.SpaceID, spaces.SpaceID),
+		SpaceViewID:   firstNonEmpty(account.SpaceViewID, prior.SpaceViewID, spaces.SpaceViewID),
 		SpaceName:     spaceName,
 		Cookies:       cookies,
 	}, nil
